@@ -67,6 +67,7 @@ static int ad5766_set_ch_dither_scale(struct iio_dev *dev,
 
 enum {
 	AD5766_DITHER_PWR,
+	AD5766_DITHER_INVERT
 };
 
 static const char * const ad5766_dither_sources[] = {
@@ -98,6 +99,8 @@ static const struct iio_enum ad5766_dither_scale_enum = {
 
 static const struct iio_chan_spec_ext_info ad5766_ext_info[] = {
 	_AD5766_CHAN_EXT_INFO("dither_pwr", AD5766_DITHER_PWR, IIO_SEPARATE),
+	_AD5766_CHAN_EXT_INFO("dither_invert", AD5766_DITHER_INVERT,
+			      IIO_SEPARATE),
 	IIO_ENUM("dither_source", IIO_SEPARATE, &ad5766_dither_source_enum),
 	IIO_ENUM_AVAILABLE_SHARED("dither_source",
 				  IIO_SEPARATE,
@@ -183,6 +186,8 @@ struct ad5766_chip_info {
  * @dither_power_ctrl:	Power-down bit for each channel dither block (for
  *			example, D15 = DAC 15,D8 = DAC 8, and D0 = DAC 0)
  *			0 - Normal operation, 1 - Power down
+ * @dither_invert:	Inverts the dither signal applied to the selected DAC
+ *			outputs
  * @dither_source:	Selects between 3 possible sources: No dither, N0, N1
  *			2 config bits per channel: 0 - No Dither, 1 - N0, 2 - N1
  * @dither_scale:	Selects between 4 possible sources:
@@ -200,6 +205,7 @@ struct ad5766_state {
 	enum ad5766_voltage_range	crt_range;
 	enum ad5766_voltage_range	cached_offset;
 	u16		dither_power_ctrl;
+	u16		dither_invert;
 	u32		dither_source;
 	u32		dither_scale;
 	s32		scale_avail[AD5766_VOLTAGE_RANGE_MAX][2];
@@ -392,6 +398,12 @@ static int ad5766_default_setup(struct ad5766_state *st,
 	if (ret)
 		return ret;
 
+	st->dither_invert = 0;
+	ret = _ad5766_spi_write(st, AD5766_CMD_INV_DITHER,
+			     st->dither_invert);
+	if (ret)
+		return ret;
+
 	/* Set No Dither for all 16 channels */
 	st->dither_source = 0;
 	return ad5766_set_dither_source(st, st->dither_source);
@@ -508,6 +520,10 @@ static ssize_t ad5766_write_ext(struct iio_dev *indio_dev,
 	int ret;
 	struct ad5766_state *st = iio_priv(indio_dev);
 
+	ret = kstrtobool(buf, &readin);
+	if (ret)
+		return ret;
+
 	switch ((u32)private) {
 	case AD5766_DITHER_PWR:
 		ret = kstrtobool(buf, &readin);
@@ -521,6 +537,13 @@ static ssize_t ad5766_write_ext(struct iio_dev *indio_dev,
 
 		ret = ad5766_write(indio_dev, AD5766_CMD_WR_PWR_DITHER,
 			     st->dither_power_ctrl);
+		break;
+	case AD5766_DITHER_INVERT:
+		st->dither_invert = (st->dither_invert &
+						~BIT(chan->channel)) |
+						(readin << chan->channel);
+		ret = ad5766_write(indio_dev, AD5766_CMD_INV_DITHER,
+				st->dither_power_ctrl);
 		break;
 	default:
 		ret = -EINVAL;
@@ -609,6 +632,9 @@ static ssize_t ad5766_read_ext(struct iio_dev *indio_dev,
 	case AD5766_DITHER_PWR:
 		return sprintf(buf, "%u\n",
 			       !!(st->dither_power_ctrl & BIT(chan->channel)));
+	case AD5766_DITHER_INVERT:
+		return sprintf(buf, "%u\n", 0x01 &
+			       (st->dither_invert >> chan->channel));
 	default:
 		ret = -EINVAL;
 		break;
